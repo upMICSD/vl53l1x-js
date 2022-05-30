@@ -64,7 +64,7 @@ async function main () {
             let timex = aux-start;
             console.log(`Time = ${timex/1000} s`);
             const rangeStatus = await sensor.getRangeStatus();
-            //console.log(`Range status = ${rangeStatus}`);
+            console.log(`Range status = ${rangeStatus}`);
             data_array.push({"time": timex, "distance": distance});
             time_array.push(timex);
             distance_array.push(distance);
@@ -80,6 +80,9 @@ async function main () {
             console.log('File created successfuly');
         });
         */
+
+        await sensor.setOffset(0);
+        console.log('\nOffset: ' + await sensor.getOffset() + '\n');
         
         //Distance Mode = SHORT
         await sensor.setDistanceMode(VL53L1X.DISTANCE_MODE_SHORT);

@@ -182,6 +182,8 @@ class VL53L1X {
         this.i2cRead = util.promisify(this.i2c.read.bind(this.i2c, this.address));
     }
 
+
+    //Read and Write functions
     async writeByte(index, byte) {
         const buffer = [];
         buffer[0] = index >> 8;
@@ -252,9 +254,26 @@ class VL53L1X {
         return dw;
     }
 
+
+    //Other funcitons
     async sleep(ms) {
         return new Promise(resolve => setTimeout(resolve, ms));
     }
+
+    async getSensorId() {
+        const sensorId = await this.readWord(VL53L1_IDENTIFICATION__MODEL_ID);
+        return sensorId;
+    }
+
+    async getInterruptPolarity() {
+        let temp = await this.readByte(GPIO_HV_MUX__CTRL);
+        temp = temp & 0x10;
+        return (temp>>4) ? 0 : 1;
+    }
+
+    //////////////////////////////
+    //Mandatory Ranging funtions//
+    //////////////////////////////
 
     async sensorInit() {
         for (let reg = 0x2D; reg <= 0x87; reg += 1) {
@@ -269,20 +288,10 @@ class VL53L1X {
         await this.writeByte(0x0B, 0); /* start VHV from the previous temperature */
     }
 
-    async getSensorId() {
-        const sensorId = await this.readWord(VL53L1_IDENTIFICATION__MODEL_ID);
-        return sensorId;
-    }
-
     async startRanging() {
         await this.writeByte(SYSTEM__MODE_START, 0x40);	/* Enable VL53L1X */
     }
-    async getInterruptPolarity() {
-        let temp = await this.readByte(GPIO_HV_MUX__CTRL);
-        temp = temp & 0x10;
-        return (temp>>4) ? 0 : 1;
-    }
-
+    
     async checkForDataReady() {
         const intPol = await this.getInterruptPolarity();
         const temp = await this.readByte(GPIO__TIO_HV_STATUS);
@@ -313,11 +322,18 @@ class VL53L1X {
         return distance;
     }
 
+
+    /////////////////////////////
+    //Optional driver functions//
+    /////////////////////////////
+
+        //Check if device is booted
     async bootState() {
         const tmp = await this.readByte(VL53L1_FIRMWARE__SYSTEM_STATUS);
         return tmp;
     }
 
+        //Timing Budget
     async getTimingBudgetInMs() {
         const temp = await this.readWord(RANGE_CONFIG__TIMEOUT_MACROP_A_HI);
         let timingBudget;
@@ -355,18 +371,6 @@ class VL53L1X {
         }
         return timingBudget;
     }
-
-    async getDistanceMode() {
-        const tempDM = await this.readByte(PHASECAL_CONFIG__TIMEOUT_MACROP);
-        let distanceMode;
-        if (tempDM === 0x14) {
-            distanceMode = 1;
-        } else if (tempDM === 0x0A) {
-            distanceMode = 2;
-        }
-        return distanceMode;
-    }
-
     async setTimingBudgetInMs(timingBudgetInMs) {
         const distanceMode = await this.getDistanceMode();
 
@@ -439,6 +443,17 @@ class VL53L1X {
         }
     }
 
+        //Distance Mode
+    async getDistanceMode() {
+        const tempDM = await this.readByte(PHASECAL_CONFIG__TIMEOUT_MACROP);
+        let distanceMode;
+        if (tempDM === 0x14) {
+            distanceMode = 1;
+        } else if (tempDM === 0x0A) {
+            distanceMode = 2;
+        }
+        return distanceMode;
+    }
     async setDistanceMode(mode) {
         const timingBudget = await this.getTimingBudgetInMs();
 
@@ -463,6 +478,7 @@ class VL53L1X {
         await this.setTimingBudgetInMs(timingBudget);
     }
 
+        //Measurement
     async getInterMeasurementInMs() {
         let pIM = await this.readDoubleWord(VL53L1_SYSTEM__INTERMEASUREMENT_PERIOD);
         let clockPLL = await this.readWord(VL53L1_RESULT__OSC_CALIBRATE_VAL);
@@ -470,7 +486,6 @@ class VL53L1X {
         pIM = Math.round(pIM / (clockPLL * 1.065));
         return pIM;
     }
-
     async setInterMeasurementInMs(interMeasMs) {
         let clockPLL = await this.readWord(VL53L1_RESULT__OSC_CALIBRATE_VAL);
         clockPLL = clockPLL & 0x3FF;
@@ -507,6 +522,8 @@ class VL53L1X {
      *
      * @returns {Promise<number>}
      */
+    
+        //Range Status
     async getRangeStatus() {
         let rangeStatus = await this.readByte(VL53L1_RESULT__RANGE_STATUS);
         rangeStatus = rangeStatus & 0x1F;
@@ -515,7 +532,55 @@ class VL53L1X {
         }
         return rangeStatus;
     }
+
+    ///////////////
+    //CALIBRATION//
+    ///////////////
+
+        //Offset
+    async setOffset(val) {
+        let temp = val*4;
+        await this.writeWord(ALGO__PART_TO_PART_RANGE_OFFSET_MM, temp);
+        await this.writeWord(MM_CONFIG__INNER_OFFSET_MM, 0x0);
+        await this.writeWord(MM_CONFIG__OUTER_OFFSET_MM, 0x0);
+    }
+    async getOffset() {
+        let status = await this.readWord(ALGO__PART_TO_PART_RANGE_OFFSET_MM);
+        return status;
+    }
+
+        //Crosstalk
+    async setXtalk(val) {
+        await this.writeWord(ALGO__CROSSTALK_COMPENSATION_X_PLANE_GRADIENT_KCPS, 0X0000);
+        await this.writeWord(ALGO__CROSSTALK_COMPENSATION_Y_PLANE_GRADIENT_KCPS, 0X0000);
+        await this.writeWord(ALGO__CROSSTALK_COMPENSATION_PLANE_OFFSET_KCPS, (val<<9)/1000);
+    }
+    async getXtalk() {
+        return await this.readWord(ALGO__CROSSTALK_COMPENSATION_PLANE_OFFSET_KCPS);
+    }
+
+
+    /////////////
+    //Threshold//
+    /////////////
+
+    async setDistanceThreshold(low_val, high_val) {
+        //let aux = await this.readByte(SYSTEM__INTERRUPT_CONFIG_GPIO);
+        await this.writeWord(SYSTEM__THRESH_HIGH, high_val);
+        await this.writeWord(SYSTEM__THRESH_LOW, low_val);
+    }
+
+    async getDistanceThresholdLow() {
+        return await this.readWord(SYSTEM__THRESH_LOW);
+    }
+
+    async getDistanceThresholdHigh() {
+        return await this.readWord(SYSTEM__THRESH_HIGH);
+    }
+
 }
+
+
 
 VL53L1X.DISTANCE_MODE_SHORT = 1;
 VL53L1X.DISTANCE_MODE_LONG = 2;
