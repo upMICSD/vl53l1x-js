@@ -5,6 +5,10 @@ const NUM_OF_DATA = 10;
 var fs = require('fs');
 const csv = require('csvtojson');
 const { Parser } = require('json2csv');
+const { Console } = require('console');
+//import { stringify } from 'csv-stringify';
+//import { generate } from 'csv-generate';
+
 //const parser = require('csv-parser');
 //import  { stringify } from 'csv-stringify';
 //var stringify = require('csv-stringify');
@@ -49,25 +53,74 @@ async function main () {
     const iM = await sensor.getInterMeasurementInMs();
     console.log(`inter measurement interval = ${iM}ms`);
 
+    //Thresholds
+    //await sensor.setDistanceThreshold(40, 100);
+    
+    //console.log('Low Threshold = ' + sensor.getDistanceThresholdLow()+ '\n');
+
     try {
         await sensor.startRanging();
         let data_array = [];
         let time_array = [];
         let distance_array = [];
+
         //Long Distance Mode set of data
         const start = new Date();
         for (let i = 0; i < NUM_OF_DATA; i += 1) {
             await sensor.waitForDataReady();
             const distance = await sensor.getDistance();
+
             console.log(`Distance = ${distance} mm`);
+
+            //let thresh_mode = 1;
+            /*
+                Distance detection mode, based on threshold values:
+                 - 0: low (no report if distance < thresh_low)
+                 - 1: high (no report if distance > thresh_high)
+                 - 2: out of window (no report if thresh_low < distance < thresh_high)
+                 - 3: inside window (no report if thresh_low > distance > thresh_high)
+            */
+            /*let flag = 0;
+            switch (thresh_mode) {
+                case 0:
+                    if (distance > sensor.getDistanceThresholdLow()) {
+                        console.log(`Distance = ${distance} mm`);
+                        flag = 1;
+                    }
+                    break;
+                case 1:
+                    if (distance < SYSTEM__THRESH_HIGH) {
+                        console.log(`Distance = ${distance} mm`);
+                        flag = 1;
+                    }
+                    break;
+                case 2:
+                    if (distance < SYSTEM__THRESH_LOW && distance > SYSTEM__THRESH_HIGH) {
+                        console.log(`Distance = ${distance} mm`);
+                        flag = 1;
+                    }
+                    break;
+                case 3:
+                    if (distance > SYSTEM__THRESH_LOW && distance < SYSTEM__THRESH_HIGH) {
+                        console.log(`Distance = ${distance} mm`);
+                        flag = 1;
+                    }
+                    break;
+                default:
+                    alert('Invalid threshold mode value. Please insert a number between 0 and 3.\n');
+            }
+            */
+
             const aux = new Date();
             let timex = aux-start;
-            console.log(`Time = ${timex/1000} s`);
+            //console.log(`Time = ${timex/1000} s`);
             const rangeStatus = await sensor.getRangeStatus();
-            console.log(`Range status = ${rangeStatus}`);
-            data_array.push({"time": timex, "distance": distance});
-            time_array.push(timex);
-            distance_array.push(distance);
+            //console.log(`Range status = ${rangeStatus}`);
+            //if(flag) {
+                data_array.push({"time": timex, "distance": distance});
+                time_array.push(timex);
+                distance_array.push(distance);
+            //}
             await sensor.clearInterrupt();
             await sleep(500);
         }
@@ -81,7 +134,7 @@ async function main () {
         });
         */
 
-        await sensor.setOffset(0);
+        await sensor.setOffset(10);
         console.log('\nOffset: ' + await sensor.getOffset() + '\n');
         
         //Distance Mode = SHORT
