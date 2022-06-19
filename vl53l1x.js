@@ -538,9 +538,36 @@ class VL53L1X {
     ///////////////
 
         //Offset
+    async calibrateOffset(dist) {
+        console.log("Calibrating Offset...");
+
+        await this.writeWord(ALGO__PART_TO_PART_RANGE_OFFSET_MM, 0x0*4);
+        await this.writeWord(MM_CONFIG__INNER_OFFSET_MM, 0x0);
+        await this.writeWord(MM_CONFIG__OUTER_OFFSET_MM, 0x0);
+        await this.startRanging();
+        
+        let avgDist = 0;
+        for (let i = 0; i < 50; i++) {
+            let tmp = 0;
+            while (tmp == 0) {
+                //console.log("Checking for data ready...");
+                tmp = await this.checkForDataReady();
+            }
+            //console.log("Data Ready!\n");
+            let distance = await this.getDistance();
+            console.log(`${distance} mm`);
+            await this.clearInterrupt();
+            avgDist = avgDist + distance;
+        }
+        await this.stopRanging();
+        avgDist = avgDist / 50;
+        console.log(`Average Distance: ${avgDist} mm\n`);
+        //console.log(`Calibration complete! Offset value set to ${dist-avgDist}\n`)
+        return (dist - avgDist);
+    }
+
     async setOffset(val) {
-        let temp = val*4;
-        await this.writeWord(ALGO__PART_TO_PART_RANGE_OFFSET_MM, temp);
+        await this.writeWord(ALGO__PART_TO_PART_RANGE_OFFSET_MM, val*4);
         await this.writeWord(MM_CONFIG__INNER_OFFSET_MM, 0x0);
         await this.writeWord(MM_CONFIG__OUTER_OFFSET_MM, 0x0);
     }
@@ -551,9 +578,10 @@ class VL53L1X {
 
         //Crosstalk
     async setXtalk(val) {
+        /* XTalkValue in count per second to avoid float type */
         await this.writeWord(ALGO__CROSSTALK_COMPENSATION_X_PLANE_GRADIENT_KCPS, 0X0000);
         await this.writeWord(ALGO__CROSSTALK_COMPENSATION_Y_PLANE_GRADIENT_KCPS, 0X0000);
-        await this.writeWord(ALGO__CROSSTALK_COMPENSATION_PLANE_OFFSET_KCPS, (val<<9)/1000);
+        await this.writeWord(ALGO__CROSSTALK_COMPENSATION_PLANE_OFFSET_KCPS, (val<<9)/1000); /* * << 9 (7.9 format) and /1000 to convert cps to kpcs */
     }
     async getXtalk() {
         return await this.readWord(ALGO__CROSSTALK_COMPENSATION_PLANE_OFFSET_KCPS);
@@ -563,11 +591,18 @@ class VL53L1X {
     /////////////
     //Threshold//
     /////////////
-
-    async setDistanceThreshold(low_val, high_val) {
+    //Confirmar se está bem implementado
+    async setDistanceThreshold(low_val, high_val, window_mode) {
         //let aux = await this.readByte(SYSTEM__INTERRUPT_CONFIG_GPIO);
+        let Temp = 0;
+        Temp = Temp & 0x47;
+        await this.writeByte(SYSTEM__INTERRUPT_CONFIG_GPIO, ((Temp | (window_mode & 0x07)) | 0x40));
         await this.writeWord(SYSTEM__THRESH_HIGH, high_val);
         await this.writeWord(SYSTEM__THRESH_LOW, low_val);
+    }
+
+    async getDistanceThresholdWindow() {
+        return await this.readByte(SYSTEM__INTERRUPT_CONFIG_GPIO);
     }
 
     async getDistanceThresholdLow() {

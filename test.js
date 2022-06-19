@@ -1,6 +1,6 @@
 const VL53L1X = require('./vl53l1x');
 const I2C = require('raspi-i2c').I2C;
-const NUM_OF_DATA = 10;
+const NUM_OF_DATA = 50;
 
 var fs = require('fs');
 const csv = require('csvtojson');
@@ -50,21 +50,35 @@ async function main () {
     console.log(`inter measurement interval = ${iM}ms`);
 
     try {
+        //RefSPAD Calibration
+        //??
+
+        //Ofset Calibration
+        await sensor.setOffset(await sensor.calibrateOffset(140));
+        //console.log('\nOffset: ' + await sensor.getOffset() + '\n');
+
+        //Xtalk Calibration
+        //await sensor.setXtalk(3);
+
+        //Start Ranging
         await sensor.startRanging();
         let data_array = [];
         let time_array = [];
         let distance_array = [];
+
         //Long Distance Mode set of data
         const start = new Date();
+        let count = 0;
         for (let i = 0; i < NUM_OF_DATA; i += 1) {
             await sensor.waitForDataReady();
             const distance = await sensor.getDistance();
-            console.log(`Distance = ${distance} mm`);
+            //console.log(`Distance = ${distance} mm`);
+            count += distance;
             const aux = new Date();
             let timex = aux-start;
-            console.log(`Time = ${timex/1000} s`);
+            //console.log(`Time = ${timex/1000} s`);
             const rangeStatus = await sensor.getRangeStatus();
-            console.log(`Range status = ${rangeStatus}`);
+            //console.log(`Range status = ${rangeStatus}`);
             data_array.push({"time": timex, "distance": distance});
             time_array.push(timex);
             distance_array.push(distance);
@@ -72,7 +86,7 @@ async function main () {
             await sleep(500);
         }
         console.log(data_array);
-        
+        console.log(`Average measuremt: ${count/NUM_OF_DATA} mm`);
         //export_to_csv(data_array,"data.csv");
         /*
         stringify(data_array, { header: true }, function (err, output) {
@@ -81,21 +95,20 @@ async function main () {
         });
         */
 
-        await sensor.setOffset(0);
-        console.log('\nOffset: ' + await sensor.getOffset() + '\n');
+        
         
         //Distance Mode = SHORT
         await sensor.setDistanceMode(VL53L1X.DISTANCE_MODE_SHORT);
         const distanceMode2 = await sensor.getDistanceMode();
-        console.log(`distanceMode = ${distanceMode2 === VL53L1X.DISTANCE_MODE_SHORT ? 'SHORT' : 'LONG'}`);
+        //console.log(`distanceMode = ${distanceMode2 === VL53L1X.DISTANCE_MODE_SHORT ? 'SHORT' : 'LONG'}`);
         const timingBudgetInMs2 = await sensor.getTimingBudgetInMs();
-        console.log(`timing budget = ${timingBudgetInMs2}ms`);
+        //console.log(`timing budget = ${timingBudgetInMs2}ms`);
 
         //Short Distance Mode set of data
         for (let i = 0; i < NUM_OF_DATA; i += 1) {
             await sensor.waitForDataReady();
             const distance = await sensor.getDistance();
-            console.log(`Distance = ${distance} mm`);
+            //console.log(`Distance = ${distance} mm`);
             await sensor.clearInterrupt();
             await sleep(500);
         }
