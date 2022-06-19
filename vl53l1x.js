@@ -271,6 +271,17 @@ class VL53L1X {
         return (temp>>4) ? 0 : 1;
     }
 
+    //Implementadas por mim
+
+    //This function returns the returned signal in kcps
+    async getSignalRate() {
+        return await this.readWord(VL53L1_RESULT__PEAK_SIGNAL_COUNT_RATE_CROSSTALK_CORRECTED_MCPS_SD0);
+    }
+    //This function returns the current number of enabled SPADs
+    async getSpadNb() {
+        return await this.readWord(VL53L1_RESULT__DSS_ACTUAL_EFFECTIVE_SPADS_SD0);
+    }
+
     //////////////////////////////
     //Mandatory Ranging funtions//
     //////////////////////////////
@@ -577,11 +588,44 @@ class VL53L1X {
     }
 
         //Crosstalk
+
+    async calibrateXtalk(dist) {
+        console.log("Calibrating Offset...");
+        
+        await this.startRanging();
+        let avgDist = 0;
+        let avgSPADnum = 0;
+        let avg_sr = 0;
+        for (let i = 0; i < 50; i++) {
+            let tmp = 0;
+            while (tmp == 0) {
+                tmp = await this.checkForDataReady();
+            }
+            let sr = await this.getSignalRate();
+            let distance = await this.getDistance();
+            console.log(`${distance} mm`);
+            await this.clearInterrupt();
+            let spad_num = await this.getSpadNb();
+            avgDist = avgDist + distance;
+            avgSPADnum += spad_num;
+            avg_sr += sr;
+        }        
+        
+        await this.stopRanging();
+        avgDist = avgDist / 50;
+        avgSPADnum = avgSPADnum / 50;
+        avg_sr = avg_sr / 50;
+        let calcXtalk = 512 * (avg_sr * (1 - (avgDist/dist))) / avgSPADnum;
+        console.log(`Average Distance: ${avgDist} mm\n`);
+        return calcXtalk;
+
+    }
+
     async setXtalk(val) {
         /* XTalkValue in count per second to avoid float type */
         await this.writeWord(ALGO__CROSSTALK_COMPENSATION_X_PLANE_GRADIENT_KCPS, 0X0000);
         await this.writeWord(ALGO__CROSSTALK_COMPENSATION_Y_PLANE_GRADIENT_KCPS, 0X0000);
-        await this.writeWord(ALGO__CROSSTALK_COMPENSATION_PLANE_OFFSET_KCPS, (val<<9)/1000); /* * << 9 (7.9 format) and /1000 to convert cps to kpcs */
+        await this.writeWord(ALGO__CROSSTALK_COMPENSATION_PLANE_OFFSET_KCPS, val);
     }
     async getXtalk() {
         return await this.readWord(ALGO__CROSSTALK_COMPENSATION_PLANE_OFFSET_KCPS);

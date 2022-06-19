@@ -57,8 +57,8 @@ async function main () {
         await sensor.setOffset(await sensor.calibrateOffset(140));
         //console.log('\nOffset: ' + await sensor.getOffset() + '\n');
 
-        //Xtalk Calibration
-        //await sensor.setXtalk(3);
+        //Xtalk Calibration (should only be performed if there is a cover glass)
+        await sensor.setXtalk(await sensor.calibrateXtalk(140));
 
         //Start Ranging
         await sensor.startRanging();
