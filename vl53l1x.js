@@ -566,14 +566,14 @@ class VL53L1X {
             }
             //console.log("Data Ready!\n");
             let distance = await this.getDistance();
-            console.log(`${distance} mm`);
+            //console.log(`${distance} mm`);
             await this.clearInterrupt();
             avgDist = avgDist + distance;
         }
         await this.stopRanging();
         avgDist = avgDist / 50;
-        console.log(`Average Distance: ${avgDist} mm\n`);
-        //console.log(`Calibration complete! Offset value set to ${dist-avgDist}\n`)
+        //console.log(`Average Distance: ${avgDist} mm\n`);
+        console.log(`Calibration complete! Offset value set to ${dist-avgDist}\n`)
         return (dist - avgDist);
     }
 
