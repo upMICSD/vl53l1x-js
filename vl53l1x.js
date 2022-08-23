@@ -173,14 +173,54 @@ const status_rtn = [ 255, 255, 255, 5, 2, 4, 1, 7, 3, 0,
     255, 255, 11, 12
 ];
 
+function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function getCurrentEpochMs() {
+    return (new Date()).valueOf()
+}
+
 class VL53L1X {
     constructor(options) {
         this.i2c = options.i2c;
-        this.address = options.address || 0x29;
+        this.address = (options.address & 0xFF) || 0x29;
 
         this.i2cWrite = util.promisify(this.i2c.write.bind(this.i2c, this.address));
         this.i2cRead = util.promisify(this.i2c.read.bind(this.i2c, this.address));
     }
+
+    //change sensor address and wait for it to respond on the new address
+    async changeAddress(newAddress) {
+        await this.writeByte(VL53L1_I2C_SLAVE__DEVICE_ADDRESS, newAddress & 0xFF);
+
+        this.address = newAddress & 0xFF;
+        this.i2cWrite = util.promisify(this.i2c.write.bind(this.i2c, this.address));
+        this.i2cRead = util.promisify(this.i2c.read.bind(this.i2c, this.address));
+
+        const timeoutMs = 2000;
+        const startTime = getCurrentEpochMs();
+        while(true) {
+            const currentMs = getCurrentEpochMs();
+            if(currentMs - startTime >= timeoutMs) {
+                break;
+            }
+            try {
+                await this.waitForBooted(startTime + timeoutMs - currentMs)
+                return;
+            } catch (e) {
+                if (e.code !== 'EREMOTEIO') {
+                    throw e
+                }
+            }
+            await sleep(1);
+        }
+        throw new Error('timed out while changing address');
+    }
+
+    ////////////////////////////
+    //Read and Write functions//
+    ////////////////////////////
 
     async writeByte(index, byte) {
         const buffer = [];
@@ -252,9 +292,9 @@ class VL53L1X {
         return dw;
     }
 
-    async sleep(ms) {
-        return new Promise(resolve => setTimeout(resolve, ms));
-    }
+    ///////////////////////////////
+    //Mandatory Ranging functions//
+    ///////////////////////////////
 
     async sensorInit() {
         for (let reg = 0x2D; reg <= 0x87; reg += 1) {
@@ -269,14 +309,15 @@ class VL53L1X {
         await this.writeByte(0x0B, 0); /* start VHV from the previous temperature */
     }
 
+    async startRanging() {
+        await this.writeByte(SYSTEM__MODE_START, 0x40);	/* Enable VL53L1X */
+    }
+
     async getSensorId() {
         const sensorId = await this.readWord(VL53L1_IDENTIFICATION__MODEL_ID);
         return sensorId;
     }
 
-    async startRanging() {
-        await this.writeByte(SYSTEM__MODE_START, 0x40);	/* Enable VL53L1X */
-    }
     async getInterruptPolarity() {
         let temp = await this.readByte(GPIO_HV_MUX__CTRL);
         temp = temp & 0x10;
@@ -295,7 +336,7 @@ class VL53L1X {
     async waitForDataReady() {
         let ready = await this.checkForDataReady();
         while (!ready) {
-            await this.sleep(10);
+            await sleep(1);
             ready = await this.checkForDataReady();
         }
     }
@@ -313,9 +354,40 @@ class VL53L1X {
         return distance;
     }
 
+
+    /////////////////////////////
+    //Optional driver functions//
+    /////////////////////////////
+
+    //This function returns the returned signal in kcps
+    async getSignalRate() {
+        return await this.readWord(VL53L1_RESULT__PEAK_SIGNAL_COUNT_RATE_CROSSTALK_CORRECTED_MCPS_SD0);
+    }
+
+    //This function returns the current number of enabled SPADs
+    async getSpadNb() {
+        return await this.readWord(VL53L1_RESULT__DSS_ACTUAL_EFFECTIVE_SPADS_SD0);
+    }
+
     async bootState() {
         const tmp = await this.readByte(VL53L1_FIRMWARE__SYSTEM_STATUS);
         return tmp;
+    }
+
+    async waitForBooted(timeoutMs) {
+        const hasTimeout =
+            !!timeoutMs &&
+            typeof timeoutMs === 'number' &&
+            !Number.isNaN(timeoutMs) &&
+            Number.isFinite(timeoutMs) &&
+            timeoutMs > 0
+        const startTime = hasTimeout ? getCurrentEpochMs() : 0;
+        while(await this.bootState() !== 3) {
+            if(hasTimeout && (getCurrentEpochMs() - startTime) > timeoutMs) {
+                throw Error('timed out while waiting for device to boot')
+            }
+            await sleep(1)
+        }
     }
 
     async getTimingBudgetInMs() {
@@ -351,20 +423,8 @@ class VL53L1X {
                 break;
             default:
                 throw new Error(`Unexpected timing budget ${temp}`);
-                timingBudget = 0;
         }
         return timingBudget;
-    }
-
-    async getDistanceMode() {
-        const tempDM = await this.readByte(PHASECAL_CONFIG__TIMEOUT_MACROP);
-        let distanceMode;
-        if (tempDM === 0x14) {
-            distanceMode = 1;
-        } else if (tempDM === 0x0A) {
-            distanceMode = 2;
-        }
-        return distanceMode;
     }
 
     async setTimingBudgetInMs(timingBudgetInMs) {
@@ -437,6 +497,17 @@ class VL53L1X {
                     break;
             }
         }
+    }
+
+    async getDistanceMode() {
+        const tempDM = await this.readByte(PHASECAL_CONFIG__TIMEOUT_MACROP);
+        let distanceMode;
+        if (tempDM === 0x14) {
+            distanceMode = 1;
+        } else if (tempDM === 0x0A) {
+            distanceMode = 2;
+        }
+        return distanceMode;
     }
 
     async setDistanceMode(mode) {
@@ -515,6 +586,162 @@ class VL53L1X {
         }
         return rangeStatus;
     }
+
+    ///////////////
+    //CALIBRATION//
+    ///////////////
+
+    //Offset
+    getOffset() {
+        return this.readWord(ALGO__PART_TO_PART_RANGE_OFFSET_MM);
+    }
+
+    async setOffset(val) {
+        await this.writeWord(ALGO__PART_TO_PART_RANGE_OFFSET_MM, val*4);
+        await this.writeWord(MM_CONFIG__INNER_OFFSET_MM, 0x0);
+        await this.writeWord(MM_CONFIG__OUTER_OFFSET_MM, 0x0);
+    }
+
+    async calculateOffsetCalibration(dist) {
+        //console.log("Calibrating Offset...");
+
+        await this.writeWord(ALGO__PART_TO_PART_RANGE_OFFSET_MM, 0x0*4);
+        await this.writeWord(MM_CONFIG__INNER_OFFSET_MM, 0x0);
+        await this.writeWord(MM_CONFIG__OUTER_OFFSET_MM, 0x0);
+        await this.startRanging();
+
+        let avgDist = 0;
+        for (let i = 0; i < 50; i++) {
+            let tmp = false;
+            while (!tmp) {
+                //console.log("Checking for data ready...");
+                tmp = await this.checkForDataReady();
+                await sleep(1)
+                //console.log(`tmp = ${tmp}`);
+            }
+            //console.log("Data Ready!\n");
+            let distance = await this.getDistance();
+            //console.log(`${distance} mm`);
+            await this.clearInterrupt();
+            avgDist = avgDist + distance;
+        }
+        await this.stopRanging();
+        avgDist = avgDist / 50;
+        //console.log(`Average Distance: ${avgDist} mm\n`);
+        //console.log(`Calibration complete! Offset value set to ${dist-avgDist}\n`)
+        return (dist - avgDist);
+    }
+
+    //Crosstalk
+    getXTalk() {
+        return this.readWord(ALGO__CROSSTALK_COMPENSATION_PLANE_OFFSET_KCPS);
+    }
+
+    async setXTalk(val) {
+        await this.writeWord(ALGO__CROSSTALK_COMPENSATION_X_PLANE_GRADIENT_KCPS, 0X0000);
+        await this.writeWord(ALGO__CROSSTALK_COMPENSATION_Y_PLANE_GRADIENT_KCPS, 0X0000);
+        await this.writeWord(ALGO__CROSSTALK_COMPENSATION_PLANE_OFFSET_KCPS, (val<<9)/1000);
+    }
+
+    async calculateXTalkCalibration(dist) {
+        //console.log("Calibrating cross talk...");
+
+        await this.startRanging();
+        let avgDist = 0;
+        let avgSPADnum = 0;
+        let avg_sr = 0;
+        for (let i = 0; i < 50; i++) {
+            let tmp = 0;
+            while (tmp === 0) {
+                tmp = await this.checkForDataReady();
+            }
+            let sr = await this.getSignalRate();
+            let distance = await this.getDistance();
+            //console.log(`${distance} mm`);
+            await this.clearInterrupt();
+            let spad_num = await this.getSpadNb();
+            avgDist = avgDist + distance;
+            avgSPADnum += spad_num;
+            avg_sr += sr;
+        }
+
+        await this.stopRanging();
+        avgDist = avgDist / 50;
+        avgSPADnum = avgSPADnum / 50;
+        avg_sr = avg_sr / 50;
+        const calcXtalk = 512 * (avg_sr * (1 - (avgDist/dist))) / avgSPADnum;
+        //console.log(`Average Distance: ${avgDist} mm\n`);
+        return calcXtalk;
+    }
+
+    //Threshold
+    getDistanceThresholdLow() {
+        return this.readWord(SYSTEM__THRESH_LOW);
+    }
+
+    async setDistanceThresholdLow(val) {
+        //let aux = await this.readByte(SYSTEM__INTERRUPT_CONFIG_GPIO);
+        await this.writeWord(SYSTEM__THRESH_LOW, val);
+    }
+
+    getDistanceThresholdHigh() {
+        return this.readWord(SYSTEM__THRESH_HIGH);
+    }
+
+    async setDistanceThresholdHigh(val) {
+        //let aux = await this.readByte(SYSTEM__INTERRUPT_CONFIG_GPIO);
+        await this.writeWord(SYSTEM__THRESH_HIGH, val);
+    }
+
+    getDistanceThresholdWindow() {
+        return this.readByte(SYSTEM__INTERRUPT_CONFIG_GPIO);
+    }
+
+    async setDistanceThresholdWindow(window_mode) {
+        // In the official implementation this is 0x07 but window_mode can
+        // only be 0, 1, 2 or 3, which can be represented by 2 bits.
+        // For this reason, we are using 0x03 instead.
+        await this.writeByte(SYSTEM__INTERRUPT_CONFIG_GPIO, window_mode & 0x03);
+    }
+
+
+    //ROI - Region of Interest
+    async setROICenter(roi_center) {
+        await this.writeByte(ROI_CONFIG__USER_ROI_CENTRE_SPAD, roi_center);
+    }
+
+    async getROICenter() {
+        return this.readByte(ROI_CONFIG__USER_ROI_CENTRE_SPAD);
+    }
+
+    async setROI(x, y) {
+        let OpticalCenter = await this.readByte(VL53L1_ROI_CONFIG__MODE_ROI_CENTRE_SPAD);
+        if (x < 4) {
+            x = 4;
+        }
+        if (x > 16) {
+            x = 16;
+        }
+        if (y < 4) {
+            y = 4;
+        }
+        if (y > 16) {
+            y = 16;
+        }
+        if (x > 10 || y > 10) {
+            OpticalCenter = 199;
+        }
+        await this.writeByte(ROI_CONFIG__USER_ROI_CENTRE_SPAD, OpticalCenter);
+        await this.writeByte(ROI_CONFIG__USER_ROI_REQUESTED_GLOBAL_XY_SIZE, (y - 1) << 4 | (x - 1));
+    }
+
+    async getROI_XY()
+    {
+        return this.readByte(ROI_CONFIG__USER_ROI_REQUESTED_GLOBAL_XY_SIZE);
+        //*ROI_X = ((uint16_t)tmp & 0x0F) + 1;
+        //*ROI_Y = (((uint16_t)tmp & 0xF0) >> 4) + 1;
+    }
+
 }
 
 VL53L1X.DISTANCE_MODE_SHORT = 1;
